@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: trustlens
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: meta-llama/llama-4-scout-17b-16e-instruct
+      - key: DATABASE_URL
+        value: sqlite:///trustlens.db
+      - key: PORT
+        value: "10000"
+      - key: FLASK_DEBUG
+        value: "false"
