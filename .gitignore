@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+uploads/
+checkpoints/
+*.db
+*.sqlite3

@@ -106,11 +106,13 @@ def index():
 
 @app.route('/api/health')
 def health():
+    groq_configured = bool(os.getenv('GROQ_API_KEY'))
     return jsonify({
         'status': 'ok',
-        'model': 'EfficientNet-B4',
-        'version': '1.0.0',
-        'device': os.popen('python -c "import torch; print(torch.device(\'cuda\' if torch.cuda.is_available() else \'cpu\'))"').read().strip()
+        'model': os.getenv('GROQ_MODEL', 'meta-llama/llama-4-scout-17b-16e-instruct'),
+        'version': '2.0.0',
+        'engine': 'Groq Vision AI',
+        'groq_configured': groq_configured
     })
 
 

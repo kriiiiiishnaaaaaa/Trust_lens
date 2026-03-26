@@ -1,288 +1,153 @@
 """
-TrustLens - Deepfake Detection Model
-Uses EfficientNet-B4 as backbone with a custom binary classification head.
-Pre-trained on ImageNet, fine-tunable on FaceForensics++ or Celeb-DF datasets.
+TrustLens - Deepfake Detection via Groq Vision AI
+Replaces the untrained EfficientNet with Groq's vision model for accurate detection.
 """
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision.transforms as transforms
-from torchvision import models
-from PIL import Image
-import numpy as np
-import cv2
 import os
 import io
+import cv2
+import json
+import base64
 import logging
+import numpy as np
+from PIL import Image
+from groq import Groq
 
 logger = logging.getLogger(__name__)
 
+GROQ_DEFAULT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-# ─────────────────────────────────────────────
-#  Model Architecture
-# ─────────────────────────────────────────────
+DEEPFAKE_PROMPT = """You are a forensic media analyst specializing in deepfake and AI-generated face detection.
 
-class EfficientNetDeepfakeDetector(nn.Module):
-    """
-    Deepfake detector built on EfficientNet-B4 backbone.
-    Binary output: real (0) vs fake (1)
-    """
+Carefully examine this image for signs of manipulation or AI generation. Check for:
+1. Facial boundary artifacts — blurring, blending seams, unnatural edges around the face
+2. Skin texture anomalies — over-smoothing, missing pores, plastic appearance
+3. Eye inconsistencies — unnatural reflections, misaligned gaze, wrong iris details
+4. Lighting mismatches — shadows that don't match light sources, unnatural specular highlights
+5. GAN/diffusion artifacts — checkerboard patterns, frequency noise, asymmetric features
+6. Background–face inconsistency — mismatched sharpness or compression
 
-    def __init__(self, dropout_rate: float = 0.4, pretrained: bool = True):
-        super().__init__()
+Respond with ONLY a valid JSON object, no explanation outside the JSON:
+{
+  "label": "FAKE" or "REAL",
+  "fake_probability": <integer 0-100>,
+  "real_probability": <integer 0-100>,
+  "confidence": <integer 0-100>,
+  "face_detected": true or false,
+  "reasoning": "<one sentence summary>",
+  "artifacts_found": ["artifact1", "artifact2"]
+}"""
 
-        # Load EfficientNet-B4 backbone
-        weights = models.EfficientNet_B4_Weights.IMAGENET1K_V1 if pretrained else None
-        backbone = models.efficientnet_b4(weights=weights)
-
-        # Remove original classifier
-        self.features = backbone.features
-        self.avgpool = backbone.avgpool
-
-        # Custom classification head for deepfake detection
-        # EfficientNet-B4 outputs 1792 features
-        self.classifier = nn.Sequential(
-            nn.Dropout(p=dropout_rate),
-            nn.Linear(1792, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=dropout_rate / 2),
-            nn.Linear(512, 128),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, 2)  # [real, fake]
-        )
-
-        # Frequency analysis branch (catches GAN artifacts in frequency domain)
-        self.freq_branch = nn.Sequential(
-            nn.Linear(1024, 256),
-            nn.ReLU(),
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Linear(64, 2)
-        )
-
-        self._initialize_weights()
-
-    def _initialize_weights(self):
-        for m in self.classifier.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-
-    def forward(self, x, freq_features=None):
-        # Spatial features from EfficientNet
-        x = self.features(x)
-        x = self.avgpool(x)
-        spatial_features = torch.flatten(x, 1)
-
-        spatial_out = self.classifier(spatial_features)
-
-        if freq_features is not None:
-            freq_out = self.freq_branch(freq_features)
-            # Ensemble: weighted average
-            out = 0.7 * spatial_out + 0.3 * freq_out
-        else:
-            out = spatial_out
-
-        return out
-
-    def get_feature_embeddings(self, x):
-        """Returns intermediate feature embeddings for analysis."""
-        x = self.features(x)
-        x = self.avgpool(x)
-        return torch.flatten(x, 1)
-
-
-# ─────────────────────────────────────────────
-#  Frequency Domain Analysis
-# ─────────────────────────────────────────────
-
-def extract_frequency_features(image_np: np.ndarray) -> np.ndarray:
-    """
-    Extracts FFT-based frequency domain features.
-    GANs and diffusion models leave characteristic artifacts in frequency space.
-    """
-    gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-    gray = cv2.resize(gray, (256, 256))
-
-    # Fast Fourier Transform
-    fft = np.fft.fft2(gray)
-    fft_shift = np.fft.fftshift(fft)
-    magnitude = np.log(np.abs(fft_shift) + 1e-8)
-
-    # Normalize
-    magnitude = (magnitude - magnitude.min()) / (magnitude.max() - magnitude.min() + 1e-8)
-
-    # Flatten to feature vector (center 32x32 captures low-freq patterns)
-    h, w = magnitude.shape
-    center = magnitude[h//2-16:h//2+16, w//2-16:w//2+16]
-    features = center.flatten()  # 1024 features
-
-    return features.astype(np.float32)
-
-
-# ─────────────────────────────────────────────
-#  Face Extractor (OpenCV DNN — no extra deps)
-# ─────────────────────────────────────────────
-
-class FaceExtractor:
-    """
-    Extracts faces from images using OpenCV DNN face detector.
-    Falls back to full image if no face is detected.
-    """
-
-    def __init__(self):
-        self.detector = None
-        self._load_detector()
-
-    def _load_detector(self):
-        """Load OpenCV's DNN face detector."""
-        try:
-            # Use OpenCV's built-in Haar cascade as fallback
-            self.detector = cv2.CascadeClassifier(
-                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            )
-            logger.info("Face detector loaded (Haar Cascade)")
-        except Exception as e:
-            logger.warning(f"Face detector load failed: {e}. Will use full image.")
-            self.detector = None
-
-    def extract_face(self, image_np: np.ndarray, margin: float = 0.3):
-        """
-        Detects and crops the largest face with margin.
-        Returns cropped face or full image if no face found.
-        """
-        if self.detector is None:
-            return image_np
-
-        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-        faces = self.detector.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80)
-        )
-
-        if len(faces) == 0:
-            logger.debug("No face detected, using full image")
-            return image_np
-
-        # Use largest face
-        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-        H, W = image_np.shape[:2]
-
-        # Add margin
-        mx = int(w * margin)
-        my = int(h * margin)
-        x1 = max(0, x - mx)
-        y1 = max(0, y - my)
-        x2 = min(W, x + w + mx)
-        y2 = min(H, y + h + my)
-
-        face_crop = image_np[y1:y2, x1:x2]
-        return face_crop if face_crop.size > 0 else image_np
-
-
-# ─────────────────────────────────────────────
-#  Inference Pipeline
-# ─────────────────────────────────────────────
 
 class DeepfakeDetectionPipeline:
     """
-    Full inference pipeline:
-    Image/Video → Face Detection → Preprocessing → EfficientNet → Result
+    Inference pipeline powered by Groq Vision API.
+    Same public interface as the original PyTorch pipeline.
     """
 
-    # ImageNet normalization (EfficientNet-B4)
-    TRANSFORM = transforms.Compose([
-        transforms.Resize((380, 380)),  # EfficientNet-B4 native resolution
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        )
-    ])
-
     def __init__(self, model_path: str = None, device: str = None):
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"Using device: {self.device}")
+        api_key = os.getenv('GROQ_API_KEY')
+        if not api_key:
+            raise RuntimeError("GROQ_API_KEY environment variable is not set")
+        self.client = Groq(api_key=api_key)
+        self.model = os.getenv('GROQ_MODEL', GROQ_DEFAULT_MODEL)
+        logger.info(f"Groq Vision pipeline ready — model: {self.model}")
 
-        self.model = EfficientNetDeepfakeDetector(pretrained=True)
-        self.model = self.model.to(self.device)
+    # ─────────────────────────────────────────────
+    #  Internal helpers
+    # ─────────────────────────────────────────────
 
-        if model_path and os.path.exists(model_path):
-            self._load_weights(model_path)
-            logger.info(f"Loaded fine-tuned weights from {model_path}")
-        else:
-            logger.info("Using ImageNet pre-trained weights (no fine-tuned checkpoint found)")
-            logger.info("→ For best accuracy, fine-tune on FaceForensics++ dataset")
+    def _to_b64_jpeg(self, image_bytes: bytes, max_dim: int = 800) -> str:
+        """Resize + compress image and return base64 JPEG string."""
+        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=85)
+        return base64.b64encode(buf.getvalue()).decode('utf-8')
 
-        self.model.eval()
-        self.face_extractor = FaceExtractor()
+    def _frame_to_b64_jpeg(self, frame_rgb: np.ndarray, max_dim: int = 640) -> str:
+        """Convert a numpy frame (RGB) to base64 JPEG."""
+        img = Image.fromarray(frame_rgb)
+        img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=80)
+        return base64.b64encode(buf.getvalue()).decode('utf-8')
 
-    def _load_weights(self, path: str):
-        checkpoint = torch.load(path, map_location=self.device)
-        if 'model_state_dict' in checkpoint:
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            self.model.load_state_dict(checkpoint)
+    def _call_groq(self, image_b64: str) -> dict:
+        """Send image to Groq vision model and parse structured JSON response."""
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
+                        },
+                        {
+                            "type": "text",
+                            "text": DEEPFAKE_PROMPT
+                        }
+                    ]
+                }
+            ],
+            max_tokens=512,
+            temperature=0.1
+        )
 
-    def _preprocess_image(self, image_np: np.ndarray) -> tuple:
-        """Face extraction + tensor preprocessing."""
-        face = self.face_extractor.extract_face(image_np)
-        freq_features = extract_frequency_features(face)
+        content = response.choices[0].message.content.strip()
 
-        pil_img = Image.fromarray(face).convert('RGB')
-        tensor = self.TRANSFORM(pil_img).unsqueeze(0).to(self.device)
-        freq_tensor = torch.tensor(freq_features).unsqueeze(0).to(self.device)
+        # Strip markdown code fences if present
+        if '```' in content:
+            parts = content.split('```')
+            for part in parts:
+                stripped = part.strip()
+                if stripped.startswith('json'):
+                    stripped = stripped[4:].strip()
+                if stripped.startswith('{'):
+                    content = stripped
+                    break
 
-        return tensor, freq_tensor
+        return json.loads(content)
+
+    # ─────────────────────────────────────────────
+    #  Public interface
+    # ─────────────────────────────────────────────
 
     def predict_image(self, image_data: bytes) -> dict:
         """
-        Predict deepfake probability for a single image.
-
-        Returns:
-            dict with keys: label, confidence, fake_prob, real_prob, face_detected
+        Analyze a single image for deepfake indicators.
+        Returns dict with keys: success, label, confidence, fake_probability,
+                                real_probability, face_detected, reasoning, artifacts_found
         """
         try:
-            image = Image.open(io.BytesIO(image_data)).convert('RGB')
-            image_np = np.array(image)
+            image_b64 = self._to_b64_jpeg(image_data)
+            result = self._call_groq(image_b64)
 
-            tensor, freq_tensor = self._preprocess_image(image_np)
-
-            with torch.no_grad():
-                logits = self.model(tensor, freq_tensor)
-                probs = F.softmax(logits, dim=1)
-                fake_prob = probs[0][1].item()
-                real_prob = probs[0][0].item()
-
-            label = 'FAKE' if fake_prob > 0.5 else 'REAL'
-            confidence = max(fake_prob, real_prob) * 100
+            fake_prob = float(result.get('fake_probability', 50))
+            real_prob = float(result.get('real_probability', 100 - fake_prob))
 
             return {
                 'success': True,
-                'label': label,
-                'confidence': round(confidence, 2),
-                'fake_probability': round(fake_prob * 100, 2),
-                'real_probability': round(real_prob * 100, 2),
-                'face_detected': True,
-                'analysis_method': 'EfficientNet-B4 + Frequency Analysis'
+                'label': result.get('label', 'FAKE' if fake_prob >= 50 else 'REAL'),
+                'confidence': round(float(result.get('confidence', max(fake_prob, real_prob))), 2),
+                'fake_probability': round(fake_prob, 2),
+                'real_probability': round(real_prob, 2),
+                'face_detected': result.get('face_detected', True),
+                'reasoning': result.get('reasoning', ''),
+                'artifacts_found': result.get('artifacts_found', []),
+                'analysis_method': f'Groq Vision AI ({self.model})'
             }
 
         except Exception as e:
             logger.error(f"Image prediction error: {e}")
             return {'success': False, 'error': str(e)}
 
-    def predict_video(self, video_path: str, sample_frames: int = 15) -> dict:
+    def predict_video(self, video_path: str, sample_frames: int = 8) -> dict:
         """
-        Predict deepfake probability for a video by sampling frames.
-
-        Args:
-            video_path: Path to video file
-            sample_frames: Number of frames to analyze
-
-        Returns:
-            Aggregated prediction across sampled frames
+        Analyze a video by sampling frames and aggregating results.
+        Returns aggregated prediction across sampled frames.
         """
         try:
             cap = cv2.VideoCapture(video_path)
@@ -292,35 +157,33 @@ class DeepfakeDetectionPipeline:
             if total_frames == 0:
                 return {'success': False, 'error': 'Could not read video'}
 
-            # Sample frames evenly across the video
-            frame_indices = np.linspace(0, total_frames - 1, sample_frames, dtype=int)
-            frame_predictions = []
+            n = min(sample_frames, total_frames)
+            frame_indices = np.linspace(0, total_frames - 1, n, dtype=int)
+            fake_probs = []
             frames_analyzed = 0
 
             for idx in frame_indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
                 ret, frame = cap.read()
                 if not ret:
                     continue
 
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
                 try:
-                    tensor, freq_tensor = self._preprocess_image(frame_rgb)
-                    with torch.no_grad():
-                        logits = self.model(tensor, freq_tensor)
-                        probs = F.softmax(logits, dim=1)
-                        frame_predictions.append(probs[0][1].item())
-                        frames_analyzed += 1
-                except Exception:
+                    image_b64 = self._frame_to_b64_jpeg(frame_rgb)
+                    result = self._call_groq(image_b64)
+                    fake_probs.append(float(result.get('fake_probability', 50)) / 100.0)
+                    frames_analyzed += 1
+                except Exception as frame_err:
+                    logger.warning(f"Frame {idx} skipped: {frame_err}")
                     continue
 
             cap.release()
 
-            if not frame_predictions:
+            if not fake_probs:
                 return {'success': False, 'error': 'No frames could be analyzed'}
 
-            fake_prob = float(np.mean(frame_predictions))
+            fake_prob = float(np.mean(fake_probs))
             real_prob = 1.0 - fake_prob
             label = 'FAKE' if fake_prob > 0.5 else 'REAL'
             confidence = max(fake_prob, real_prob) * 100
@@ -334,7 +197,7 @@ class DeepfakeDetectionPipeline:
                 'frames_analyzed': frames_analyzed,
                 'total_frames': total_frames,
                 'duration_seconds': round(total_frames / fps, 1) if fps > 0 else 0,
-                'analysis_method': 'EfficientNet-B4 + Temporal Aggregation'
+                'analysis_method': f'Groq Vision AI ({self.model}) + Temporal Aggregation'
             }
 
         except Exception as e:
