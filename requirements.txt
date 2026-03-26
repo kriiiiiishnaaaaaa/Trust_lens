@@ -1,0 +1,29 @@
+# TrustLens — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# ── Core Framework ──
+flask==3.0.3
+flask-cors==4.0.0
+python-dotenv==1.0.1
+werkzeug==3.0.3
+
+# ── ML / Deep Learning ──
+torch>=2.1.0                  # PyTorch (install CPU or CUDA version from pytorch.org)
+torchvision>=0.16.0           # EfficientNet, transforms
+numpy>=1.24.0
+Pillow>=10.0.0                # Image loading
+
+# ── Computer Vision ──
+opencv-python>=4.8.0          # Face detection, video processing
+
+# ── ML Utilities ──
+scikit-learn>=1.3.0           # Metrics: accuracy, AUC, classification report
+
+# ── Database ──
+SQLAlchemy>=2.0.0             # ORM (SQLite + PostgreSQL + MySQL)
+psycopg2-binary>=2.9.0        # PostgreSQL driver
+pymysql>=1.1.0                # MySQL driver
+
+# ── Dev / Testing ──
+pytest>=7.4.0
+tqdm>=4.66.0

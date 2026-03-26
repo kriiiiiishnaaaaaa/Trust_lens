@@ -1,0 +1,1618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TrustLens — Deepfake Detection System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #050810;
+      --surface:   #0b0f1c;
+      --panel:     #0e1424;
+      --border:    rgba(0, 220, 255, 0.10);
+      --border-hi: rgba(0, 220, 255, 0.30);
+      --cyan:      #00dcff;
+      --cyan-dim:  #00a8cc;
+      --red:       #ff3b5c;
+      --green:     #00ffa3;
+      --yellow:    #ffd166;
+      --text:      #c8d8e8;
+      --text-dim:  #586a80;
+      --text-bright: #eaf4ff;
+      --glow:      0 0 24px rgba(0, 220, 255, 0.15);
+      --glow-hi:   0 0 40px rgba(0, 220, 255, 0.30);
+    }
+
+    html { font-size: 16px; scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'IBM Plex Mono', monospace;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Background grid ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,220,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,220,255,0.025) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Scanlines overlay ── */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.06) 2px,
+        rgba(0,0,0,0.06) 4px
+      );
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* ── Layout ── */
+    .wrap {
+      position: relative;
+      z-index: 2;
+      max-width: 1300px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Header ── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(5, 8, 16, 0.88);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      border: 1.5px solid var(--cyan);
+      display: grid;
+      place-items: center;
+      clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+      background: rgba(0,220,255,0.06);
+      font-size: 16px;
+      animation: pulse-border 3s ease-in-out infinite;
+    }
+
+    @keyframes pulse-border {
+      0%,100% { box-shadow: 0 0 8px rgba(0,220,255,0.2); }
+      50% { box-shadow: 0 0 20px rgba(0,220,255,0.5); }
+    }
+
+    .logo-text {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 1.4rem;
+      color: var(--text-bright);
+      letter-spacing: -0.02em;
+    }
+
+    .logo-text span { color: var(--cyan); }
+
+    .nav-pills {
+      display: flex;
+      gap: 4px;
+    }
+
+    .nav-pill {
+      padding: 6px 16px;
+      border: 1px solid transparent;
+      background: none;
+      color: var(--text-dim);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .nav-pill:hover, .nav-pill.active {
+      color: var(--cyan);
+      border-color: var(--border-hi);
+      background: rgba(0,220,255,0.04);
+    }
+
+    /* ── Status bar ── */
+    .status-bar {
+      background: rgba(0,220,255,0.04);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 0;
+    }
+
+    .status-inner {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      letter-spacing: 0.06em;
+    }
+
+    .status-dot {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: blink 2s ease-in-out infinite;
+    }
+
+    .dot.yellow { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
+    .dot.red { background: var(--red); box-shadow: 0 0 8px var(--red); animation: none; }
+
+    @keyframes blink {
+      0%,100% { opacity: 1; } 50% { opacity: 0.3; }
+    }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 80px 0 60px;
+      text-align: center;
+    }
+
+    .hero-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border-hi);
+      padding: 4px 14px;
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin-bottom: 28px;
+      background: rgba(0,220,255,0.04);
+    }
+
+    h1 {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: clamp(2.4rem, 5vw, 4rem);
+      line-height: 1.05;
+      color: var(--text-bright);
+      letter-spacing: -0.03em;
+      margin-bottom: 16px;
+    }
+
+    h1 em {
+      font-style: normal;
+      color: var(--cyan);
+      position: relative;
+    }
+
+    h1 em::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+    }
+
+    .hero-sub {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      max-width: 520px;
+      margin: 0 auto 48px;
+      line-height: 1.7;
+    }
+
+    /* ── Stats row ── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      margin-bottom: 48px;
+    }
+
+    .stat-cell {
+      background: var(--surface);
+      padding: 20px 24px;
+      text-align: center;
+    }
+
+    .stat-val {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 1.8rem;
+      color: var(--cyan);
+      display: block;
+    }
+
+    .stat-lbl {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-top: 4px;
+      display: block;
+    }
+
+    /* ── Main grid ── */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+
+    /* ── Panel ── */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .panel::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--cyan-dim), transparent);
+      opacity: 0.4;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .panel-title {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--cyan);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-title::before {
+      content: '//';
+      opacity: 0.5;
+    }
+
+    .panel-body { padding: 24px; }
+
+    /* ── Upload zone ── */
+    .upload-zone {
+      border: 1.5px dashed var(--border-hi);
+      min-height: 240px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.3s;
+      background: rgba(0,220,255,0.015);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .upload-zone:hover, .upload-zone.drag-over {
+      border-color: var(--cyan);
+      background: rgba(0,220,255,0.05);
+      box-shadow: var(--glow-hi);
+    }
+
+    .upload-zone input { display: none; }
+
+    .upload-icon {
+      font-size: 2.5rem;
+      margin-bottom: 16px;
+      opacity: 0.7;
+    }
+
+    .upload-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--text-bright);
+      margin-bottom: 6px;
+    }
+
+    .upload-hint {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      text-align: center;
+      line-height: 1.8;
+    }
+
+    .upload-preview {
+      width: 100%;
+      height: 240px;
+      object-fit: contain;
+      display: none;
+    }
+
+    video.upload-preview {
+      width: 100%;
+      height: 240px;
+      display: none;
+    }
+
+    .preview-overlay {
+      position: absolute;
+      top: 8px; right: 8px;
+      background: rgba(5,8,16,0.85);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      font-size: 0.65rem;
+      color: var(--cyan);
+      letter-spacing: 0.08em;
+    }
+
+    /* ── Analyze button ── */
+    .btn-analyze {
+      width: 100%;
+      margin-top: 16px;
+      padding: 14px 24px;
+      background: var(--cyan);
+      color: var(--bg);
+      border: none;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 0.9rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+      clip-path: polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%);
+    }
+
+    .btn-analyze:hover:not(:disabled) {
+      background: var(--text-bright);
+      box-shadow: var(--glow-hi);
+      transform: translateY(-1px);
+    }
+
+    .btn-analyze:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* ── Progress bar ── */
+    .progress-wrap {
+      margin-top: 12px;
+      display: none;
+    }
+
+    .progress-label {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .progress-bar {
+      height: 3px;
+      background: var(--border);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--cyan-dim), var(--cyan));
+      width: 0%;
+      transition: width 0.3s;
+      animation: progress-glow 1.5s ease-in-out infinite;
+    }
+
+    @keyframes progress-glow {
+      0%,100% { box-shadow: 0 0 8px var(--cyan); }
+      50% { box-shadow: 0 0 20px var(--cyan); }
+    }
+
+    /* ── Result panel ── */
+    .result-empty {
+      min-height: 360px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-dim);
+      font-size: 0.75rem;
+      gap: 12px;
+    }
+
+    .result-empty-icon {
+      font-size: 2.5rem;
+      opacity: 0.3;
+    }
+
+    .result-content { display: none; }
+
+    /* ── Verdict ── */
+    .verdict {
+      text-align: center;
+      padding: 32px 0 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+
+    .verdict-label {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 3rem;
+      letter-spacing: -0.02em;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .verdict-label.real { color: var(--green); text-shadow: 0 0 30px rgba(0,255,163,0.4); }
+    .verdict-label.fake { color: var(--red); text-shadow: 0 0 30px rgba(255,59,92,0.4); }
+
+    .verdict-sub {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--text-dim);
+    }
+
+    /* ── Confidence arc ── */
+    .confidence-wrap {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 24px;
+    }
+
+    .confidence-arc {
+      position: relative;
+      width: 140px;
+      height: 140px;
+    }
+
+    .confidence-arc svg { transform: rotate(-90deg); }
+
+    .arc-track { fill: none; stroke: var(--border); stroke-width: 6; }
+    .arc-fill  { fill: none; stroke-width: 6; stroke-linecap: round;
+                 stroke-dasharray: 345; stroke-dashoffset: 345;
+                 transition: stroke-dashoffset 1.2s cubic-bezier(0.4,0,0.2,1); }
+    .arc-fill.real { stroke: var(--green); filter: drop-shadow(0 0 8px var(--green)); }
+    .arc-fill.fake { stroke: var(--red);   filter: drop-shadow(0 0 8px var(--red)); }
+
+    .arc-label {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .arc-pct {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 2rem;
+      color: var(--text-bright);
+      line-height: 1;
+    }
+
+    .arc-sub {
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+    }
+
+    /* ── Result rows ── */
+    .result-rows { display: flex; flex-direction: column; gap: 10px; }
+
+    .result-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 0.72rem;
+    }
+
+    .result-row-key {
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .result-row-val {
+      color: var(--text-bright);
+      font-weight: 500;
+    }
+
+    /* ── Probability bars ── */
+    .prob-bars { margin-bottom: 20px; }
+
+    .prob-row { margin-bottom: 12px; }
+
+    .prob-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.68rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 5px;
+    }
+
+    .prob-track {
+      height: 5px;
+      background: var(--border);
+      overflow: hidden;
+    }
+
+    .prob-fill {
+      height: 100%;
+      width: 0%;
+      transition: width 1s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    .prob-fill.real { background: linear-gradient(90deg, #00cc80, var(--green)); }
+    .prob-fill.fake { background: linear-gradient(90deg, #cc2244, var(--red)); }
+
+    /* ── DB Connection panel ── */
+    .db-section {
+      margin-bottom: 32px;
+    }
+
+    .db-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 24px;
+    }
+
+    .db-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 20px;
+      position: relative;
+    }
+
+    .db-card-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: var(--text-bright);
+      margin-bottom: 4px;
+    }
+
+    .db-card-sub {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+    }
+
+    .db-badge {
+      position: absolute;
+      top: 16px; right: 16px;
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 3px 8px;
+      border: 1px solid;
+    }
+
+    .db-badge.active { color: var(--green); border-color: rgba(0,255,163,0.3); background: rgba(0,255,163,0.05); }
+    .db-badge.inactive { color: var(--text-dim); border-color: var(--border); }
+    .db-badge.recommended { color: var(--yellow); border-color: rgba(255,209,102,0.3); background: rgba(255,209,102,0.05); }
+
+    label.field-lbl {
+      display: block;
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-bottom: 5px;
+    }
+
+    input.field-input, select.field-input {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.75rem;
+      padding: 9px 12px;
+      outline: none;
+      margin-bottom: 12px;
+      transition: border-color 0.2s;
+      appearance: none;
+    }
+
+    input.field-input:focus, select.field-input:focus {
+      border-color: var(--cyan);
+      box-shadow: var(--glow);
+    }
+
+    .btn-sm {
+      padding: 8px 16px;
+      border: 1px solid var(--border-hi);
+      background: none;
+      color: var(--cyan);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-sm:hover {
+      background: rgba(0,220,255,0.08);
+      box-shadow: var(--glow);
+    }
+
+    .btn-sm.danger {
+      color: var(--red);
+      border-color: rgba(255,59,92,0.3);
+    }
+
+    /* ── History table ── */
+    .history-section { margin-bottom: 48px; }
+
+    .history-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .history-filter {
+      display: flex;
+      gap: 6px;
+    }
+
+    .filter-btn {
+      padding: 5px 12px;
+      border: 1px solid var(--border);
+      background: none;
+      color: var(--text-dim);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .filter-btn.active, .filter-btn:hover {
+      color: var(--cyan);
+      border-color: var(--border-hi);
+      background: rgba(0,220,255,0.04);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.72rem;
+    }
+
+    thead tr {
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      padding: 10px 14px;
+      text-align: left;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-size: 0.62rem;
+      color: var(--text-dim);
+    }
+
+    tbody tr {
+      border-bottom: 1px solid rgba(0,220,255,0.04);
+      transition: background 0.15s;
+    }
+
+    tbody tr:hover { background: rgba(0,220,255,0.03); }
+
+    td {
+      padding: 12px 14px;
+      color: var(--text);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 600;
+      border: 1px solid;
+    }
+
+    .badge.real { color: var(--green); border-color: rgba(0,255,163,0.3); background: rgba(0,255,163,0.06); }
+    .badge.fake { color: var(--red);   border-color: rgba(255,59,92,0.3);  background: rgba(255,59,92,0.06);  }
+
+    .conf-mini {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .conf-mini-bar {
+      flex: 1;
+      height: 3px;
+      background: var(--border);
+      overflow: hidden;
+    }
+
+    .conf-mini-fill {
+      height: 100%;
+      background: var(--cyan);
+    }
+
+    .empty-history {
+      padding: 60px 0;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 0.72rem;
+    }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 999;
+      background: var(--panel);
+      border: 1px solid var(--border-hi);
+      padding: 14px 20px;
+      font-size: 0.72rem;
+      max-width: 320px;
+      opacity: 0;
+      transform: translateY(16px);
+      transition: all 0.3s;
+      pointer-events: none;
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    #toast.error { border-color: rgba(255,59,92,0.5); color: var(--red); }
+    #toast.success { border-color: rgba(0,255,163,0.5); color: var(--green); }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 0;
+      margin-top: 24px;
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Animations ── */
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-in { animation: slide-in 0.4s ease both; }
+
+    @keyframes scan {
+      0%  { transform: translateY(-100%); opacity: 0; }
+      20% { opacity: 0.5; }
+      80% { opacity: 0.5; }
+      100%{ transform: translateY(400px); opacity: 0; }
+    }
+
+    .scan-line {
+      position: absolute;
+      left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+      animation: scan 2s ease-in-out;
+      pointer-events: none;
+    }
+
+    @media (max-width: 900px) {
+      .main-grid, .db-grid { grid-template-columns: 1fr; }
+      .stats-row { grid-template-columns: repeat(2,1fr); }
+      h1 { font-size: 2rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="wrap">
+    <div class="header-inner">
+      <a class="logo" href="#">
+        <div class="logo-icon">🔍</div>
+        <span class="logo-text">Trust<span>Lens</span></span>
+      </a>
+      <nav class="nav-pills">
+        <button class="nav-pill active" onclick="showSection('analyze')">ANALYZE</button>
+        <button class="nav-pill" onclick="showSection('history')">HISTORY</button>
+        <button class="nav-pill" onclick="showSection('database')">DATABASE</button>
+        <button class="nav-pill" onclick="showSection('about')">ABOUT</button>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<!-- Status bar -->
+<div class="status-bar">
+  <div class="wrap">
+    <div class="status-inner">
+      <div class="status-dot"><div class="dot"></div> MODEL: EFFICIENTNET-B4</div>
+      <div class="status-dot"><div class="dot yellow"></div> <span id="db-status-text">DB: CONNECTING…</span></div>
+      <div class="status-dot"><div class="dot"></div> VERSION: 1.0.0</div>
+      <div style="margin-left:auto; color: var(--text-dim)" id="clock"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Main Content -->
+<main>
+  <div class="wrap">
+
+    <!-- ── ANALYZE SECTION ── -->
+    <section id="section-analyze">
+      <div class="hero">
+        <div class="hero-tag">⬡ Neural Forensics System</div>
+        <h1>Detect <em>Deepfakes</em><br>with Precision</h1>
+        <p class="hero-sub">
+          Powered by EfficientNet-B4 + Frequency Domain Analysis.<br>
+          Upload any image or video to get an AI-powered authenticity report.
+        </p>
+      </div>
+
+      <!-- Stats row -->
+      <div class="stats-row" id="stats-row">
+        <div class="stat-cell">
+          <span class="stat-val" id="stat-total">—</span>
+          <span class="stat-lbl">Total Analyzed</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-val" id="stat-fake">—</span>
+          <span class="stat-lbl">Deepfakes Found</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-val" id="stat-conf">—</span>
+          <span class="stat-lbl">Avg Confidence</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-val" id="stat-rate">—</span>
+          <span class="stat-lbl">Fake Rate</span>
+        </div>
+      </div>
+
+      <!-- Main grid: upload + result -->
+      <div class="main-grid">
+
+        <!-- Upload Panel -->
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Media Upload</span>
+            <span style="font-size:0.65rem;color:var(--text-dim)">JPG · PNG · MP4 · AVI · MAX 100MB</span>
+          </div>
+          <div class="panel-body">
+            <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+              <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.bmp,.webp,.mp4,.avi,.mov,.mkv,.webm" onchange="onFileSelect(event)">
+              <img id="img-preview" class="upload-preview" alt="preview" />
+              <video id="vid-preview" class="upload-preview" controls></video>
+              <div class="preview-overlay" id="preview-badge" style="display:none"></div>
+              <div id="upload-prompt">
+                <div class="upload-icon">📡</div>
+                <div class="upload-title">Drop file or click to upload</div>
+                <div class="upload-hint">
+                  Supports: Images (JPG, PNG, BMP, WEBP)<br>
+                  Videos (MP4, AVI, MOV, MKV)<br>
+                  Maximum file size: 100 MB
+                </div>
+              </div>
+            </div>
+
+            <div class="progress-wrap" id="progress-wrap">
+              <div class="progress-label">
+                <span id="progress-msg">Initializing…</span>
+                <span id="progress-pct">0%</span>
+              </div>
+              <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+            </div>
+
+            <button class="btn-analyze" id="btn-analyze" disabled onclick="runAnalysis()">
+              ▶ RUN FORENSIC ANALYSIS
+            </button>
+
+            <!-- File info -->
+            <div id="file-info" style="margin-top:14px;display:none">
+              <div class="result-row">
+                <span class="result-row-key">File</span>
+                <span class="result-row-val" id="info-name">—</span>
+              </div>
+              <div class="result-row" style="margin-top:6px">
+                <span class="result-row-key">Size</span>
+                <span class="result-row-val" id="info-size">—</span>
+              </div>
+              <div class="result-row" style="margin-top:6px">
+                <span class="result-row-key">Type</span>
+                <span class="result-row-val" id="info-type">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Result Panel -->
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Analysis Result</span>
+            <span id="result-id" style="font-size:0.62rem;color:var(--text-dim)">AWAITING INPUT</span>
+          </div>
+          <div class="panel-body">
+
+            <div class="result-empty" id="result-empty">
+              <div class="result-empty-icon">⬡</div>
+              <span>Upload a file and run analysis<br>to see results here</span>
+            </div>
+
+            <div class="result-content" id="result-content">
+              <div class="verdict">
+                <div class="verdict-label" id="verdict-label">—</div>
+                <div class="verdict-sub" id="verdict-sub">—</div>
+              </div>
+
+              <div class="confidence-wrap">
+                <div class="confidence-arc">
+                  <svg width="140" height="140" viewBox="0 0 140 140">
+                    <circle class="arc-track" cx="70" cy="70" r="55"/>
+                    <circle class="arc-fill" id="arc-fill" cx="70" cy="70" r="55"/>
+                  </svg>
+                  <div class="arc-label">
+                    <span class="arc-pct" id="arc-pct">0%</span>
+                    <span class="arc-sub">confidence</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="prob-bars">
+                <div class="prob-row">
+                  <div class="prob-header">
+                    <span>REAL probability</span>
+                    <span id="prob-real-val">0%</span>
+                  </div>
+                  <div class="prob-track">
+                    <div class="prob-fill real" id="prob-real-fill"></div>
+                  </div>
+                </div>
+                <div class="prob-row">
+                  <div class="prob-header">
+                    <span>FAKE probability</span>
+                    <span id="prob-fake-val">0%</span>
+                  </div>
+                  <div class="prob-track">
+                    <div class="prob-fill fake" id="prob-fake-fill"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="result-rows" id="result-details"></div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── HISTORY SECTION ── -->
+    <section id="section-history" style="display:none">
+      <div style="padding: 48px 0 32px">
+        <div class="hero-tag">⬡ Analysis Log</div>
+        <h1 style="font-size:2rem;margin-top:12px">Detection <em>History</em></h1>
+      </div>
+
+      <div class="panel history-section">
+        <div class="panel-header">
+          <span class="panel-title">Recent Analyses</span>
+          <div class="history-controls">
+            <div class="history-filter">
+              <button class="filter-btn active" onclick="filterHistory('all',this)">ALL</button>
+              <button class="filter-btn" onclick="filterHistory('REAL',this)">REAL</button>
+              <button class="filter-btn" onclick="filterHistory('FAKE',this)">FAKE</button>
+            </div>
+            <button class="btn-sm" onclick="loadHistory()">↻ REFRESH</button>
+          </div>
+        </div>
+        <div id="history-table-wrap">
+          <div class="empty-history">Loading history…</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── DATABASE SECTION ── -->
+    <section id="section-database" style="display:none">
+      <div style="padding: 48px 0 32px">
+        <div class="hero-tag">⬡ Data Layer</div>
+        <h1 style="font-size:2rem;margin-top:12px">Database <em>Connection</em></h1>
+      </div>
+
+      <div class="db-grid db-section">
+
+        <!-- SQLite -->
+        <div class="db-card">
+          <div class="db-badge active" id="sqlite-badge">ACTIVE</div>
+          <div class="db-card-title">SQLite</div>
+          <div class="db-card-sub">Local file-based database — perfect for development</div>
+          <label class="field-lbl">File Path</label>
+          <input class="field-input" type="text" value="trustlens.db" id="sqlite-path">
+          <div style="display:flex;gap:8px">
+            <button class="btn-sm" onclick="testConnection('sqlite')">TEST</button>
+            <button class="btn-sm" onclick="applyConnection('sqlite')">APPLY</button>
+          </div>
+        </div>
+
+        <!-- PostgreSQL -->
+        <div class="db-card">
+          <div class="db-badge recommended">RECOMMENDED</div>
+          <div class="db-card-title">PostgreSQL</div>
+          <div class="db-card-sub">Production-grade relational database</div>
+          <label class="field-lbl">Host</label>
+          <input class="field-input" type="text" placeholder="localhost" id="pg-host">
+          <label class="field-lbl">Port</label>
+          <input class="field-input" type="text" placeholder="5432" id="pg-port">
+          <label class="field-lbl">Database</label>
+          <input class="field-input" type="text" placeholder="trustlens" id="pg-db">
+          <label class="field-lbl">Username</label>
+          <input class="field-input" type="text" placeholder="postgres" id="pg-user">
+          <label class="field-lbl">Password</label>
+          <input class="field-input" type="password" placeholder="••••••••" id="pg-pass">
+          <div style="display:flex;gap:8px">
+            <button class="btn-sm" onclick="testConnection('postgres')">TEST</button>
+            <button class="btn-sm" onclick="applyConnection('postgres')">APPLY</button>
+          </div>
+        </div>
+
+        <!-- MySQL -->
+        <div class="db-card">
+          <div class="db-badge inactive">OPTIONAL</div>
+          <div class="db-card-title">MySQL / MariaDB</div>
+          <div class="db-card-sub">Alternative relational database</div>
+          <label class="field-lbl">Host</label>
+          <input class="field-input" type="text" placeholder="localhost" id="my-host">
+          <label class="field-lbl">Port</label>
+          <input class="field-input" type="text" placeholder="3306" id="my-port">
+          <label class="field-lbl">Database</label>
+          <input class="field-input" type="text" placeholder="trustlens" id="my-db">
+          <label class="field-lbl">Username</label>
+          <input class="field-input" type="text" placeholder="root" id="my-user">
+          <label class="field-lbl">Password</label>
+          <input class="field-input" type="password" placeholder="••••••••" id="my-pass">
+          <div style="display:flex;gap:8px">
+            <button class="btn-sm" onclick="testConnection('mysql')">TEST</button>
+            <button class="btn-sm" onclick="applyConnection('mysql')">APPLY</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ENV preview -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">.env Configuration Preview</span>
+          <button class="btn-sm" onclick="copyEnv()">COPY</button>
+        </div>
+        <div class="panel-body">
+          <pre id="env-preview" style="font-size:0.75rem;color:var(--cyan);line-height:1.8;white-space:pre-wrap"># TrustLens .env file
+DATABASE_URL=sqlite:///trustlens.db
+MODEL_PATH=checkpoints/best_model.pth
+PORT=5000
+FLASK_DEBUG=false
+DB_ECHO=false</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── ABOUT SECTION ── -->
+    <section id="section-about" style="display:none">
+      <div style="padding: 48px 0 32px">
+        <div class="hero-tag">⬡ System Information</div>
+        <h1 style="font-size:2rem;margin-top:12px">About <em>TrustLens</em></h1>
+      </div>
+
+      <div class="main-grid">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Model Architecture</span></div>
+          <div class="panel-body">
+            <div class="result-rows">
+              <div class="result-row"><span class="result-row-key">Backbone</span><span class="result-row-val">EfficientNet-B4</span></div>
+              <div class="result-row"><span class="result-row-key">Pre-training</span><span class="result-row-val">ImageNet-1K</span></div>
+              <div class="result-row"><span class="result-row-key">Input Resolution</span><span class="result-row-val">380 × 380 px</span></div>
+              <div class="result-row"><span class="result-row-key">Feature Extractor</span><span class="result-row-val">1792-dim embedding</span></div>
+              <div class="result-row"><span class="result-row-key">Classifier Head</span><span class="result-row-val">1792→512→128→2</span></div>
+              <div class="result-row"><span class="result-row-key">Freq. Analysis</span><span class="result-row-val">FFT 1024-dim branch</span></div>
+              <div class="result-row"><span class="result-row-key">Face Detector</span><span class="result-row-val">Haar Cascade (OpenCV)</span></div>
+              <div class="result-row"><span class="result-row-key">Ensemble</span><span class="result-row-val">0.7×spatial + 0.3×freq</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Recommended Training Data</span></div>
+          <div class="panel-body">
+            <div class="result-rows">
+              <div class="result-row"><span class="result-row-key">FaceForensics++</span><span class="result-row-val" style="color:var(--green)">✓ Recommended</span></div>
+              <div class="result-row"><span class="result-row-key">Celeb-DF v2</span><span class="result-row-val" style="color:var(--green)">✓ Recommended</span></div>
+              <div class="result-row"><span class="result-row-key">DFDC (Kaggle)</span><span class="result-row-val" style="color:var(--yellow)">⚠ Large dataset</span></div>
+              <div class="result-row"><span class="result-row-key">Custom dataset</span><span class="result-row-val">real/ + fake/ folders</span></div>
+              <div class="result-row"><span class="result-row-key">Min. images</span><span class="result-row-val">5,000 per class</span></div>
+              <div class="result-row"><span class="result-row-key">Training script</span><span class="result-row-val">model/train.py</span></div>
+              <div class="result-row"><span class="result-row-key">Epochs</span><span class="result-row-val">20 (warm-up 5)</span></div>
+              <div class="result-row"><span class="result-row-key">Hardware</span><span class="result-row-val">GPU recommended</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:24px">
+        <div class="panel-header"><span class="panel-title">Quick Start Guide</span></div>
+        <div class="panel-body">
+          <pre style="font-size:0.72rem;color:var(--text);line-height:2;white-space:pre-wrap"><span style="color:var(--text-dim)"># 1. Install dependencies</span>
+pip install -r requirements.txt
+
+<span style="color:var(--text-dim)"># 2. Configure environment</span>
+cp .env.example .env
+<span style="color:var(--text-dim)"># Edit .env: set DATABASE_URL, MODEL_PATH</span>
+
+<span style="color:var(--text-dim)"># 3. (Optional) Fine-tune model on your dataset</span>
+python model/train.py --data_dir /path/to/data --epochs 20
+
+<span style="color:var(--text-dim)"># 4. Run the server</span>
+python app.py
+
+<span style="color:var(--text-dim)"># → Open http://localhost:5000</span></pre>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-inner">
+      <span>TrustLens v1.0 — EfficientNet-B4 Deepfake Detection System</span>
+      <span>Built for academic & research use · Always verify critical content professionally</span>
+    </div>
+  </div>
+</footer>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+  // ── Clock ──
+  const clock = document.getElementById('clock');
+  function tick() {
+    clock.textContent = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  }
+  tick(); setInterval(tick, 1000);
+
+  // ── Section navigation ──
+  const sections = ['analyze', 'history', 'database', 'about'];
+
+  function showSection(name) {
+    sections.forEach(s => {
+      document.getElementById('section-' + s).style.display = s === name ? '' : 'none';
+    });
+    document.querySelectorAll('.nav-pill').forEach((btn, i) => {
+      btn.classList.toggle('active', sections[i] === name);
+    });
+    if (name === 'history') loadHistory();
+    if (name === 'analyze') loadStats();
+  }
+
+  // ── Toast ──
+  function toast(msg, type = 'info') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'show ' + type;
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.className = '', 3500);
+  }
+
+  // ── File select ──
+  let selectedFile = null;
+
+  function formatBytes(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+    return (b/1048576).toFixed(1) + ' MB';
+  }
+
+  function onFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    selectedFile = file;
+    showPreview(file);
+  }
+
+  function showPreview(file) {
+    const isVideo = file.type.startsWith('video/');
+    const imgEl = document.getElementById('img-preview');
+    const vidEl = document.getElementById('vid-preview');
+    const prompt = document.getElementById('upload-prompt');
+    const badge = document.getElementById('preview-badge');
+
+    imgEl.style.display = 'none';
+    vidEl.style.display = 'none';
+    prompt.style.display = 'none';
+    badge.style.display = 'block';
+    badge.textContent = file.name.split('.').pop().toUpperCase();
+
+    if (isVideo) {
+      vidEl.src = URL.createObjectURL(file);
+      vidEl.style.display = 'block';
+    } else {
+      imgEl.src = URL.createObjectURL(file);
+      imgEl.style.display = 'block';
+    }
+
+    document.getElementById('file-info').style.display = 'block';
+    document.getElementById('info-name').textContent = file.name.length > 24
+      ? file.name.slice(0, 22) + '…' : file.name;
+    document.getElementById('info-size').textContent = formatBytes(file.size);
+    document.getElementById('info-type').textContent = isVideo ? 'VIDEO' : 'IMAGE';
+    document.getElementById('btn-analyze').disabled = false;
+  }
+
+  // ── Drag & drop ──
+  const dropZone = document.getElementById('drop-zone');
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) { selectedFile = file; showPreview(file); }
+  });
+
+  // ── Analysis ──
+  async function runAnalysis() {
+    if (!selectedFile) return;
+
+    const btn = document.getElementById('btn-analyze');
+    const progressWrap = document.getElementById('progress-wrap');
+    const progressFill = document.getElementById('progress-fill');
+    const progressMsg = document.getElementById('progress-msg');
+    const progressPct = document.getElementById('progress-pct');
+
+    btn.disabled = true;
+    btn.textContent = '⟳ ANALYZING…';
+    progressWrap.style.display = 'block';
+
+    // Simulate progress stages
+    const stages = [
+      [10, 'Uploading file…'],
+      [30, 'Extracting faces…'],
+      [55, 'Running EfficientNet-B4…'],
+      [75, 'Frequency domain analysis…'],
+      [90, 'Computing confidence…'],
+    ];
+
+    let stageIdx = 0;
+    const progressInterval = setInterval(() => {
+      if (stageIdx < stages.length) {
+        const [pct, msg] = stages[stageIdx++];
+        progressFill.style.width = pct + '%';
+        progressMsg.textContent = msg;
+        progressPct.textContent = pct + '%';
+      }
+    }, 400);
+
+    // Add scan line to upload zone
+    const scanLine = document.createElement('div');
+    scanLine.className = 'scan-line';
+    dropZone.appendChild(scanLine);
+    setTimeout(() => scanLine.remove(), 2000);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        body: formData
+      });
+
+      clearInterval(progressInterval);
+      progressFill.style.width = '100%';
+      progressMsg.textContent = 'Analysis complete!';
+      progressPct.textContent = '100%';
+
+      const result = await response.json();
+
+      if (result.success || result.label) {
+        showResult(result);
+        toast('Analysis complete — ' + result.label, result.label === 'FAKE' ? 'error' : 'success');
+        loadStats();
+      } else {
+        toast('Analysis failed: ' + (result.error || 'Unknown error'), 'error');
+      }
+
+    } catch (err) {
+      clearInterval(progressInterval);
+      // Demo mode: simulate result when no backend
+      const demoResult = simulateResult(selectedFile);
+      showResult(demoResult);
+      toast('Demo mode — backend not connected', 'error');
+    } finally {
+      setTimeout(() => {
+        progressWrap.style.display = 'none';
+        progressFill.style.width = '0%';
+      }, 1200);
+      btn.disabled = false;
+      btn.textContent = '▶ RUN FORENSIC ANALYSIS';
+    }
+  }
+
+  function simulateResult(file) {
+    // Demo simulation — replace with real backend
+    const fake_prob = Math.random() * 100;
+    const real_prob = 100 - fake_prob;
+    const label = fake_prob > 50 ? 'FAKE' : 'REAL';
+    return {
+      success: true,
+      label,
+      confidence: Math.max(fake_prob, real_prob).toFixed(2),
+      fake_probability: fake_prob.toFixed(2),
+      real_probability: real_prob.toFixed(2),
+      analysis_method: 'EfficientNet-B4 (Demo)',
+      file_size: formatBytes(file.size),
+      processing_time_ms: (Math.random() * 800 + 200).toFixed(0),
+      face_detected: true,
+    };
+  }
+
+  function showResult(data) {
+    document.getElementById('result-empty').style.display = 'none';
+    const content = document.getElementById('result-content');
+    content.style.display = 'block';
+    content.classList.add('animate-in');
+
+    const isFake = data.label === 'FAKE';
+    const cls = isFake ? 'fake' : 'real';
+
+    // Verdict
+    document.getElementById('verdict-label').textContent = data.label;
+    document.getElementById('verdict-label').className = 'verdict-label ' + cls;
+    document.getElementById('verdict-sub').textContent = isFake
+      ? 'MANIPULATED MEDIA DETECTED' : 'AUTHENTIC MEDIA VERIFIED';
+
+    // Arc
+    const pct = parseFloat(data.confidence);
+    const arcFill = document.getElementById('arc-fill');
+    arcFill.className = 'arc-fill ' + cls;
+    const circ = 2 * Math.PI * 55;
+    setTimeout(() => {
+      arcFill.style.strokeDashoffset = circ * (1 - pct / 100);
+    }, 100);
+    document.getElementById('arc-pct').textContent = Math.round(pct) + '%';
+
+    // Prob bars
+    document.getElementById('prob-real-val').textContent = parseFloat(data.real_probability).toFixed(1) + '%';
+    document.getElementById('prob-fake-val').textContent = parseFloat(data.fake_probability).toFixed(1) + '%';
+    setTimeout(() => {
+      document.getElementById('prob-real-fill').style.width = data.real_probability + '%';
+      document.getElementById('prob-fake-fill').style.width = data.fake_probability + '%';
+    }, 100);
+
+    // Result ID
+    document.getElementById('result-id').textContent = data.analysis_id
+      ? 'ID: ' + data.analysis_id.slice(0, 8).toUpperCase()
+      : 'RESULT';
+
+    // Detail rows
+    const details = [];
+    details.push({ k: 'Method', v: data.analysis_method || '—' });
+    if (data.file_size) details.push({ k: 'File Size', v: data.file_size });
+    if (data.processing_time_ms) details.push({ k: 'Proc. Time', v: data.processing_time_ms + ' ms' });
+    if (data.face_detected !== undefined) details.push({ k: 'Face Detected', v: data.face_detected ? 'YES' : 'NO' });
+    if (data.frames_analyzed) details.push({ k: 'Frames', v: data.frames_analyzed + ' / ' + data.total_frames });
+    if (data.duration_seconds) details.push({ k: 'Duration', v: data.duration_seconds + 's' });
+    if (data.cached) details.push({ k: 'Cached', v: 'YES (previous result)' });
+
+    document.getElementById('result-details').innerHTML = details.map(d => `
+      <div class="result-row">
+        <span class="result-row-key">${d.k}</span>
+        <span class="result-row-val">${d.v}</span>
+      </div>
+    `).join('');
+  }
+
+  // ── History ──
+  let historyData = [];
+  let historyFilter = 'all';
+
+  async function loadHistory() {
+    const wrap = document.getElementById('history-table-wrap');
+    wrap.innerHTML = '<div class="empty-history">Loading…</div>';
+    try {
+      const res = await fetch('/api/history?limit=100');
+      const data = await res.json();
+      historyData = data.results || [];
+      renderHistory();
+    } catch {
+      historyData = [];
+      wrap.innerHTML = '<div class="empty-history">⚠ Backend not connected. Start the Flask server.</div>';
+    }
+  }
+
+  function filterHistory(filter, btn) {
+    historyFilter = filter;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const wrap = document.getElementById('history-table-wrap');
+    const filtered = historyFilter === 'all'
+      ? historyData
+      : historyData.filter(r => r.label === historyFilter);
+
+    if (!filtered.length) {
+      wrap.innerHTML = '<div class="empty-history">No records found</div>';
+      return;
+    }
+
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>File</th><th>Type</th><th>Verdict</th>
+            <th>Confidence</th><th>Method</th><th>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filtered.map(r => `
+            <tr>
+              <td>${r.filename || '—'}</td>
+              <td>${(r.media_type || '—').toUpperCase()}</td>
+              <td><span class="badge ${r.label.toLowerCase()}">${r.label}</span></td>
+              <td>
+                <div class="conf-mini">
+                  <span style="min-width:36px">${Math.round(r.confidence)}%</span>
+                  <div class="conf-mini-bar">
+                    <div class="conf-mini-fill" style="width:${r.confidence}%;background:${r.label==='FAKE'?'var(--red)':'var(--green)'}"></div>
+                  </div>
+                </div>
+              </td>
+              <td style="color:var(--text-dim)">${r.analysis_method || '—'}</td>
+              <td style="color:var(--text-dim)">${r.created_at ? r.created_at.slice(0,10) : '—'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  // ── Stats ──
+  async function loadStats() {
+    try {
+      const res = await fetch('/api/stats');
+      const data = await res.json();
+      if (data.success) {
+        document.getElementById('stat-total').textContent = data.total_analyses;
+        document.getElementById('stat-fake').textContent = data.fake_detected;
+        document.getElementById('stat-conf').textContent = data.avg_confidence.toFixed(1) + '%';
+        document.getElementById('stat-rate').textContent = data.fake_rate + '%';
+        document.querySelector('#db-status-text').textContent = 'DB: CONNECTED';
+      }
+    } catch {
+      document.querySelector('#db-status-text').textContent = 'DB: OFFLINE';
+    }
+  }
+
+  // ── Database config ──
+  function testConnection(type) {
+    toast(`Testing ${type.toUpperCase()} connection…`);
+    setTimeout(() => toast(`${type.toUpperCase()} — configure in .env file`, 'error'), 1000);
+  }
+
+  function applyConnection(type) {
+    let url = '';
+    if (type === 'sqlite') {
+      url = `sqlite:///${document.getElementById('sqlite-path').value}`;
+    } else if (type === 'postgres') {
+      const h = document.getElementById('pg-host').value || 'localhost';
+      const p = document.getElementById('pg-port').value || '5432';
+      const d = document.getElementById('pg-db').value || 'trustlens';
+      const u = document.getElementById('pg-user').value || 'postgres';
+      const pw = document.getElementById('pg-pass').value || '';
+      url = `postgresql://${u}:${pw}@${h}:${p}/${d}`;
+    } else if (type === 'mysql') {
+      const h = document.getElementById('my-host').value || 'localhost';
+      const p = document.getElementById('my-port').value || '3306';
+      const d = document.getElementById('my-db').value || 'trustlens';
+      const u = document.getElementById('my-user').value || 'root';
+      const pw = document.getElementById('my-pass').value || '';
+      url = `mysql+pymysql://${u}:${pw}@${h}:${p}/${d}`;
+    }
+    document.getElementById('env-preview').textContent =
+`# TrustLens .env file
+DATABASE_URL=${url}
+MODEL_PATH=checkpoints/best_model.pth
+PORT=5000
+FLASK_DEBUG=false
+DB_ECHO=false`;
+    toast('Config updated — copy the .env preview and restart the server', 'success');
+  }
+
+  function copyEnv() {
+    const text = document.getElementById('env-preview').textContent;
+    navigator.clipboard.writeText(text).then(() => toast('Copied to clipboard!', 'success'));
+  }
+
+  // ── Init ──
+  loadStats();
+</script>
+</body>
+</html>
